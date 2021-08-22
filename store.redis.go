@@ -18,6 +18,10 @@ func(a *storeRedis) stop(ctx context.Context) (err error) {
 	return
 }
 
-func(a *storeRedis) start()  {
+func(a *storeRedis) start(c *Config)  {
 	return
+}
+
+func (a *storeRedis) batchAgg() chan aggItem{
+	return nil
 }

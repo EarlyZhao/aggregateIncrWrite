@@ -3,5 +3,7 @@ package aggregateIncrWrite
 import "testing"
 
 func Test_NewAgg(t *testing.T) {
-	New(NewLocalStore(), &Config{}, nil, nil)
+	New(&Config{}, SetOptionStore(NewLocalStore()), SetOptionSaveHandler(func(id string, aggIncr int64) error {
+		return nil
+	}), SetOptionFailHandler(nil))
 }

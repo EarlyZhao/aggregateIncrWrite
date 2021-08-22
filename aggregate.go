@@ -2,6 +2,8 @@ package aggregateIncrWrite
 
 import "context"
 
+type Option func(a *Aggregate)
+
 type Aggregate struct {
 	config *Config
 
@@ -30,18 +32,38 @@ func (c *Aggregate) Stop(ctx context.Context) error {
 	return nil
 }
 
-func New(store AggregateStoreInterface, conf *Config,
-		 saveHandler func(id string, aggIncr int64) error,
-		 failureHandler func(id string, aggIncr int64)) *Aggregate {
-
+func New(conf *Config, options ...Option) *Aggregate {
 	agg := &Aggregate{
-		store: store,
+		store: NewLocalStore(), // default
 		config: conf,
-		saveHandler: saveHandler,
-		failureHandler: failureHandler,
 	}
 
-	agg.store.start()
+	for _, op := range options{
+		op(agg)
+	}
+
+	if agg.saveHandler == nil {
+		panic("saveHandler must exist, use SetOptionSaveHandler")
+	}
+
+	agg.store.start(agg.config)
 	return agg
 }
 
+func SetOptionStore(store AggregateStoreInterface) Option{
+	return func(a *Aggregate){
+		a.store = store
+	}
+}
+
+func SetOptionSaveHandler(save func(id string, aggIncr int64) error) Option{
+	return func(a *Aggregate){
+		a.saveHandler = save
+	}
+}
+
+func SetOptionFailHandler(fail func(id string, aggIncr int64)) Option{
+	return func(a *Aggregate){
+		a.failureHandler = fail
+	}
+}
