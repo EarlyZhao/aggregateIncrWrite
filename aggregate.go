@@ -1,6 +1,10 @@
 package aggregateIncrWrite
 
-import "context"
+import (
+	"context"
+	"time"
+	"sync"
+)
 
 type Option func(a *Aggregate)
 
@@ -9,33 +13,50 @@ type Aggregate struct {
 
 	store AggregateStoreInterface
 
-	// 自定义日志
-	logger Logger
-	// 自定义埋点
-	metric Metric
-
 	// 聚合保存回调
 	saveHandler func(id string, aggIncr int64) error
 	// 回调错误时触发
 	failureHandler func(id string, aggIncr int64)
+
+	stoped chan bool
+	wait sync.WaitGroup
 }
 
 func (c *Aggregate) SetLogger(logger Logger) {
-	c.logger = logger
+	c.config.logger = logger
 }
 
 func (c *Aggregate) SetMetric(m Metric) {
-	c.metric = m
+	c.config.metric = m
 }
 
-func (c *Aggregate) Stop(ctx context.Context) error {
+func (a *Aggregate) Stop(ctx context.Context) error {
+	a.store.stop(ctx)
+	for i := 0; i < a.config.saveConcurrency; i++ {
+		a.stoped <- true
+	}
+	a.wait.Wait()
+
 	return nil
 }
 
+func (a *Aggregate) Incr(ctx context.Context, id string, delta int64) (err error) {
+	err = a.store.incr(ctx, id, delta)
+	if err != nil {
+		// todo metric
+		err = a.saveHandler(id, delta)
+	}
+	return
+}
+
 func New(conf *Config, options ...Option) *Aggregate {
+	if conf == nil {
+		conf = emptyConf()
+	}
 	agg := &Aggregate{
 		store: NewLocalStore(), // default
 		config: conf,
+		stoped: make(chan bool),
 	}
 
 	for _, op := range options{
@@ -47,6 +68,12 @@ func New(conf *Config, options ...Option) *Aggregate {
 	}
 
 	agg.store.start(agg.config)
+
+	for i := 0; i < agg.config.saveConcurrency; i++ {
+		agg.wait.Add(1)
+		go agg.saveWorker()
+	}
+
 	return agg
 }
 
@@ -65,5 +92,11 @@ func SetOptionSaveHandler(save func(id string, aggIncr int64) error) Option{
 func SetOptionFailHandler(fail func(id string, aggIncr int64)) Option{
 	return func(a *Aggregate){
 		a.failureHandler = fail
+	}
+}
+
+func SetOptionIncrTimeout(t time.Duration) Option{
+	return func(a *Aggregate){
+		a.config.incrTimeout = t
 	}
 }

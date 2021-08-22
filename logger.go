@@ -1,6 +1,10 @@
 package aggregateIncrWrite
 
-import "context"
+import (
+	"context"
+)
+
+var emptyLogger = &emptyLog{}
 
 type Logger interface {
 	Infoc(ctx context.Context, val string)
@@ -24,8 +28,4 @@ func (l *emptyLog) Error(val string){
 }
 func (l *emptyLog) Errorc(ctx context.Context, val string){
 
-}
-
-func defaulLog() Logger{
-	return &emptyLog{}
 }
