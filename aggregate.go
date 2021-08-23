@@ -2,8 +2,8 @@ package aggregateIncrWrite
 
 import (
 	"context"
-	"time"
 	"sync"
+	"time"
 )
 
 type Option func(a *Aggregate)
@@ -19,7 +19,7 @@ type Aggregate struct {
 	failureHandler func(id string, aggIncr int64)
 
 	stoped chan bool
-	wait sync.WaitGroup
+	wait *sync.WaitGroup
 }
 
 func (c *Aggregate) SetLogger(logger Logger) {
@@ -32,9 +32,7 @@ func (c *Aggregate) SetMetric(m Metric) {
 
 func (a *Aggregate) Stop(ctx context.Context) error {
 	a.store.stop(ctx)
-	for i := 0; i < a.config.saveConcurrency; i++ {
-		a.stoped <- true
-	}
+	close(a.stoped)
 	a.wait.Wait()
 
 	return nil
@@ -44,6 +42,7 @@ func (a *Aggregate) Incr(ctx context.Context, id string, delta int64) (err error
 	err = a.store.incr(ctx, id, delta)
 	if err != nil {
 		// todo metric
+		//a.config.getLogger().Error(fmt.Sprintf("incr err %s", err))
 		err = a.saveHandler(id, delta)
 	}
 	return
@@ -57,6 +56,7 @@ func New(conf *Config, options ...Option) *Aggregate {
 		store: NewLocalStore(), // default
 		config: conf,
 		stoped: make(chan bool),
+		wait: &sync.WaitGroup{},
 	}
 
 	for _, op := range options{
@@ -69,7 +69,7 @@ func New(conf *Config, options ...Option) *Aggregate {
 
 	agg.store.start(agg.config)
 
-	for i := 0; i < agg.config.saveConcurrency; i++ {
+	for i := 0; i < agg.config.getSaveConcurrency(); i++ {
 		agg.wait.Add(1)
 		go agg.saveWorker()
 	}

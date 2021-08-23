@@ -5,13 +5,14 @@ import (
 	"errors"
 	"fmt"
 	"hash/crc32"
+	"sync"
 	"time"
 )
 
 const incrTimeoutStr = "incr timeout"
 
 func NewLocalStore() AggregateStoreInterface{
-	return &storeLocal{stopChan: make(chan bool)}
+	return &storeLocal{stopChan: make(chan bool), wait: &sync.WaitGroup{}}
 }
 
 type storeLocal struct {
@@ -20,6 +21,7 @@ type storeLocal struct {
 	stopChan chan bool
 	batchAggChan chan aggItem
 	stoped bool
+	wait *sync.WaitGroup
 }
 
 func(a *storeLocal) incr(ctx context.Context, id string, val int64)( err error) {
@@ -55,27 +57,21 @@ func (a *storeLocal) dispatch(ctx context.Context, item *incrItem) chan *incrIte
 func(a *storeLocal) stop(ctx context.Context) (err error) {
 	a.stoped = true
 
-	for i := 0; i < a.Config.getConcurrency(); i ++ {
-		a.stopChan <- true
-	}
-
-	for i := 0; i < a.Config.getConcurrency(); i ++ {
-		close(a.buffers[i])
-	}
-
-	close(a.batchAggChan)
+	close(a.stopChan)
+	a.wait.Wait()
 
 	return
 }
 
 func(a *storeLocal) start(c *Config){
 	a.Config = c
-	a.buffers = make([]chan *incrItem, a.Config.concurrencyBuffer)
-	a.batchAggChan = make(chan aggItem, a.Config.buffer)
+	a.buffers = make([]chan *incrItem, a.Config.getConcurrency())
+	a.batchAggChan = make(chan aggItem, a.Config.getBufferNum())
 
-	for i := 0; i < a.Config.concurrencyBuffer; i ++ {
-		buffer := make(chan *incrItem, a.Config.buffer)
+	for i := 0; i < a.Config.getConcurrency(); i ++ {
+		buffer := make(chan *incrItem, a.Config.getBufferNum())
 		a.buffers[i] = buffer
+		a.wait.Add(1)
 		go a.aggregating(buffer)
 	}
 
@@ -89,29 +85,23 @@ func (a *storeLocal) batchAgg() chan aggItem {
 func (a *storeLocal) aggregating(buffer chan *incrItem) {
 	pool := make(aggItem)
 	ticker := time.Tick(a.Config.getInterval())
+	defer a.wait.Done()
 
 	for {
 		select {
 			case <- a.stopChan:
 				a.stoped = true
 
-				var	bufferOpen = true
-
-				for bufferOpen{
+				for {
 					select {
-					case item, ok := <- buffer:
-						bufferOpen = ok
-						if !ok{
-							continue
-						}
+					case item := <- buffer:
 						pool[item.id] += item.delta
+					default:
+						a.batchAggChan <- pool
+						a.Config.getLogger().Info("aggregating exit")
+						return
 					}
 				}
-
-				a.batchAggChan <- pool
-				a.Config.getLogger().Info("aggregating exit")
-
-				return
 			case item, ok := <- buffer:
 				if !ok {
 					break
@@ -119,12 +109,11 @@ func (a *storeLocal) aggregating(buffer chan *incrItem) {
 
 				pool[item.id] += item.delta
 				a.Config.getMetric().MetricIncrCount(item.delta)
-
 			case <-ticker:
+				a.Config.getLogger().Info("run save")
 				a.batchAggChan <- pool
 				a.Config.getMetric().MetricBatchCount(int64(len(pool)))
 				pool = make(aggItem)
-
 		}
 	}
 }
