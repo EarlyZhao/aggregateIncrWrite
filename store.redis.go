@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"github.com/go-redis/redis"
 	"hash/crc32"
-	"math/rand"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -42,16 +42,15 @@ func NewRedisStore(notChangeBussinessId string, cache *redis.Client) AggregateSt
 	}
 }
 
-const key = "aggIncrWrite"
+const _redisstorekey = "aIw"
 
 type storeRedis struct {
-	Config
+	*Config
 	notChangeBussinessId string
 
 	cache *redis.Client
 
 	skipListKeys []string
-	hashMapKeys []string
 
 	wait *sync.WaitGroup
 
@@ -63,26 +62,32 @@ type storeRedis struct {
 
 func(a *storeRedis) incr(ctx context.Context, id string, val int64)( err error) {
 	item := &incrItem{id: id, delta: val}
-	zsetKey, hashKey := a.dispatch(ctx, item)
+	zsetKey := a.dispatch(ctx, item)
+	incrKey := incrKey(item.id)
 	// 先 incr
-	if err = a.incrHash(ctx, hashKey, item); err != nil {
+	if err = a.incrKey(ctx, incrKey, item); err != nil {
 		return
 	}
 	// 再zadd
-	if err = a.recordInList(ctx, zsetKey, item);err != nil {
+	if err = a.recordInList(ctx, zsetKey, item.id);err != nil {
 		return
 	}
 
 	return
 }
 
-func (a *storeRedis) recordInList(ctx context.Context, key string, item *incrItem) (err error) {
-	err = a.cache.ZAddNX(key, redis.Z{Score:float64( time.Now().Unix()), Member:key}).Err()
+func incrKey(id string) string {
+	return _redisstorekey + id
+}
+
+func (a *storeRedis) recordInList(ctx context.Context, key string, member string) (err error) {
+	err = a.cache.ZAddNX(key, redis.Z{Score:float64( time.Now().Unix()), Member: member}).Err()
 	return
 }
 
-func (a *storeRedis) incrHash(ctx context.Context, key string, item *incrItem) (err error) {
-	err = a.cache.HIncrBy(key, item.id, item.delta).Err()
+func (a *storeRedis) incrKey(ctx context.Context, key string, item *incrItem) (err error) {
+	err = a.cache.IncrBy(key, item.delta).Err()
+	a.cache.Expire(key, time.Hour * 12)
 	return
 }
 
@@ -94,8 +99,10 @@ func (a *storeRedis) zrem(key string, id string) int64{
 	return a.cache.ZRem(key, id).Val()
 }
 
-func (a *storeRedis) hdel(key string, id string) int64{
-	return a.cache.HDel(key, id).Val()
+func (a *storeRedis) getset(key string, set int) int64{
+	ret := a.cache.GetSet(key, 0).Val()
+	intVal, _ := strconv.ParseInt(ret, 10, 0)
+	return intVal
 }
 
 func(a *storeRedis) stop(ctx context.Context) (err error) {
@@ -105,42 +112,50 @@ func(a *storeRedis) stop(ctx context.Context) (err error) {
 }
 
 func(a *storeRedis) start(c *Config)  {
+	a.Config = c
 	a.batchAggChan = make(chan aggItem, 100 *a.Config.getSaveConcurrency())
+
+	interval := int(a.Config.getInterval())
+	intervalPice := interval/a.Config.getConcurrency()
 	for i := 0; i < a.Config.getSaveConcurrency(); i++ {
 		zset := a.skipKey(i)
 		a.skipListKeys = append(a.skipListKeys, zset)
-		hash := a.hashKey(i)
-		a.hashMapKeys = append(a.hashMapKeys, hash)
 		a.wait.Add(1)
-		go a.aggregating(zset, hash)
+
+		delayInterval := interval
+		go func() {
+			time.Sleep(time.Duration(delayInterval))
+			a.aggregating(zset)
+		}()
+
+		interval -= intervalPice
 	}
 
 	// todo: 启动时应该有对应的任务清理旧数据。应对初始化参数中队列数量缩减的情况。
 	return
 }
 
-func (a *storeRedis) dispatch(ctx context.Context, item *incrItem) (zsetKey, hashKey string){
+func (a *storeRedis) dispatch(ctx context.Context, item *incrItem) (zsetKey string){
 	sum := crc32.ChecksumIEEE([]byte(item.id))
-	index := sum % uint32(len(a.hashMapKeys))
-	return a.skipListKeys[index], a.hashMapKeys[index]
+	index := sum % uint32(len(a.skipListKeys))
+	return a.skipListKeys[index]
 }
 
 func (a *storeRedis) batchAgg() chan aggItem{
-	return nil
+	return a.batchAggChan
 }
 
 func (a *storeRedis) skipKey(index int) string {
-	return fmt.Sprintf("%s:zset:%s:%v", key, a.notChangeBussinessId, index)
+	return fmt.Sprintf("%s:zset:%s:%v", _redisstorekey, a.notChangeBussinessId, index)
 }
 
 func (a *storeRedis) hashKey(index int) string {
-	return fmt.Sprintf("%s:hash:%s:%v", key, a.notChangeBussinessId, index)
+	return fmt.Sprintf("%s:hash:%s:%v", _redisstorekey, a.notChangeBussinessId, index)
 }
 
-func (a *storeRedis) aggregating(zset, hash string) {
+func (a *storeRedis) aggregating(zset string) {
 	defer a.wait.Done()
-	// 让tick的启动时间分散
-	time.Sleep(time.Duration(rand.Intn(int(a.Config.getInterval()))))
+
 	tiker := time.Tick(a.Config.getInterval())
 	for {
 		select{
@@ -148,16 +163,17 @@ func (a *storeRedis) aggregating(zset, hash string) {
 			a.clear()
 			return
 		case <- tiker:
-			ids := a.zrangebyScore(zset, time.Now().Unix() - 1, 400)
+			ids := a.zrangebyScore(zset, time.Now().Unix() - 1, 500)
 			aggs := make(aggItem)
 			for _, key := range ids{
 				if a.zrem(zset, key) > 0 {
-					if delta := a.hdel(hash, key); delta != 0 {
+					if delta := a.getset(incrKey(key), 0); delta != 0 {
 						aggs[key] = delta
 					}
 				}
 			}
 			a.batchAggChan <- aggs
+			// todo add metric
 		}
 	}
 }

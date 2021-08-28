@@ -3,7 +3,9 @@ package aggregateIncrWrite
 import (
 	"context"
 	"fmt"
+	"github.com/go-redis/redis"
 	. "github.com/smartystreets/goconvey/convey"
+	"math/rand"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -19,34 +21,73 @@ func Test_AggLocalIncr(t *testing.T) {
 
 	ctx := context.TODO()
 
-	Convey("test incr", t, func() {
-		times := 300
+	Convey("test local incr", t, func() {
+		times := 300000
 		var total int64
 		agg := New(
-			&Config{concurrencyBuffer: 10, saveConcurrency: 10},
+			&Config{ConcurrencyBuffer: 10, SaveConcurrency: 10},
 			SetOptionStore(NewLocalStore()),
 			SetOptionSaveHandler(func(id string, aggIncr int64) error {
-				fmt.Printf("id: %s, val: %d\n", id, aggIncr)
+				//fmt.Printf("id: %s, val: %d\n", id, aggIncr)
 				atomic.AddInt64(&total, aggIncr)
 				return nil
 			}),
 			SetOptionFailHandler(nil))
 
 		for i := 0; i < times; i ++ {
-			agg.Incr(ctx, fmt.Sprintf("%d", i / 10), 1)
-			time.Sleep(10*time.Millisecond)
+			agg.Incr(ctx, fmt.Sprintf("%d", rand.Intn(times)), 1)
+			time.Sleep(5000*time.Nanosecond)
 		}
 
 		done := make(chan bool)
 		go func() {
 			for i := 0; i < times; i ++ {
-				agg.Incr(ctx, fmt.Sprintf("%d", i / 10), 1)
+				agg.Incr(ctx, fmt.Sprintf("%d", rand.Intn(1000)), 1)
 			}
 			done <- true
 		}()
 
 		agg.Stop(ctx)
 		<- done
+		So(total, ShouldEqual, times + times)
+	})
+
+}
+
+
+func Test_AggRedisIncr(t *testing.T) {
+
+	ctx := context.TODO()
+
+	Convey("test redis incr", t, func() {
+		times := 300000
+		var total int64
+		agg := New(
+			&Config{ConcurrencyBuffer: 10, SaveConcurrency: 100},
+			SetOptionStore(NewRedisStore("test", redis.NewClient(&redis.Options{Addr:"127.0.0.1:6379"}))),
+			SetOptionSaveHandler(func(id string, aggIncr int64) error {
+				fmt.Printf("redis: id: %s, val: %d\n", id, aggIncr)
+				atomic.AddInt64(&total, aggIncr)
+				return nil
+			}),
+			SetOptionFailHandler(nil))
+
+		for i := 0; i < times; i ++ {
+			agg.Incr(ctx, fmt.Sprintf("%d", rand.Intn(times)), 1)
+			//time.Sleep(55*time.Millisecond)
+		}
+		done := make(chan bool)
+		go func() {
+			for i := 0; i < times; i ++ {
+				agg.Incr(ctx, fmt.Sprintf("%d", rand.Intn(1000)), 1)
+			}
+			done <- true
+		}()
+
+		<- done
+		time.Sleep(2*time.Second)
+		agg.Stop(ctx)
+
 		So(total, ShouldEqual, times + times)
 	})
 
