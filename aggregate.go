@@ -42,7 +42,6 @@ func (a *Aggregate) Incr(ctx context.Context, id string, delta int64) (err error
 	err = a.store.incr(ctx, id, delta)
 	if err != nil {
 		// todo metric
-		//a.config.getLogger().Error(fmt.Sprintf("incr err %s", err))
 		err = a.saveHandler(id, delta)
 	}
 	return

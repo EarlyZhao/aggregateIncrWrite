@@ -34,7 +34,7 @@ func (a *Aggregate ) saveWorker() {
 
 func (a *Aggregate) saveBatch(batch aggItem) {
 	for id, delta := range batch{
-		if err := a.saveHandler(id, delta); err != nil {
+		if err := a.saveHandler(id, delta); err != nil && a.failureHandler != nil {
 			a.failureHandler(id, delta)
 		}
 	}
