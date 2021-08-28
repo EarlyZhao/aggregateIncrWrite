@@ -22,3 +22,46 @@ update xxtable set xxcolums = xxcolumn + 1 where id = xxx ;
 - 分布式写聚合，基于分布式存储
 
 可以根据实际场景选择合适的方案。
+
+## 使用
+#### 本地聚合
+```golang
+    // 程序启动： 初始化聚合对象
+    agg := New(
+	    &Config{ConcurrencyBuffer: 10, SaveConcurrency: 10},
+            SetOptionStore(NewLocalStore()),
+            SetOptionSaveHandler(func(id string, aggIncr int64) error {
+                // 回调函数： 将聚合后的值写入数据库
+                return nil
+            }),
+            SetOptionFailHandler(func(id string, aggIncr int64) error {
+                // 失败回调函数
+                return nil
+        }))
+        
+	// incr操作
+    agg.Incr(ctx, xxid, 2)
+    
+    // 程序退出
+    agg.Stop(ctx)
+```
+
+#### redis聚合
+```golang
+    // 程序启动： 初始化聚合对象
+    agg := New(
+		&Config{ConcurrencyBuffer: 10, SaveConcurrency: 100},
+		    SetOptionStore(NewRedisStore("someIdNotChange", redis.NewClient(&redis.Options{Addr:"127.0.0.1:6379"}))),
+		    SetOptionSaveHandler(func(id string, aggIncr int64) error {
+                // 回调函数
+				return nil
+			}),
+			SetOptionFailHandler(nil),
+		)
+    
+    // incr操作
+    agg.Incr(ctx, xxid, 1)
+    
+    // 程序退出
+    agg.Stop(ctx)
+```
