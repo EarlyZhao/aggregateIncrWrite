@@ -3,7 +3,6 @@ package aggregateIncrWrite
 import (
 	"context"
 	"sync"
-	"time"
 )
 
 type Option func(a *Aggregate)
@@ -66,6 +65,7 @@ func New(conf *Config, options ...Option) *Aggregate {
 		panic("saveHandler must exist, use SetOptionSaveHandler")
 	}
 
+
 	agg.store.start(agg.config)
 
 	for i := 0; i < agg.config.getSaveConcurrency(); i++ {
@@ -91,11 +91,5 @@ func SetOptionSaveHandler(save func(id string, aggIncr int64) error) Option{
 func SetOptionFailHandler(fail func(id string, aggIncr int64)) Option{
 	return func(a *Aggregate){
 		a.failureHandler = fail
-	}
-}
-
-func SetOptionIncrTimeout(t time.Duration) Option{
-	return func(a *Aggregate){
-		a.config.incrTimeout = t
 	}
 }
