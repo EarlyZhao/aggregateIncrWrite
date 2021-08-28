@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"hash/crc32"
-	"math/rand"
 	"sync"
 	"time"
 )
@@ -62,11 +61,21 @@ func(a *storeLocal) start(c *Config){
 	a.buffers = make([]chan *incrItem, a.Config.getConcurrency())
 	a.batchAggChan = make(chan aggItem, a.Config.getBufferNum() * 100)
 
+	interval := int(a.Config.getInterval())
+	intervalPice := interval/a.Config.getConcurrency()
+
 	for i := 0; i < a.Config.getConcurrency(); i ++ {
 		buffer := make(chan *incrItem, a.Config.getBufferNum())
 		a.buffers[i] = buffer
 		a.wait.Add(1)
-		go a.aggregating(buffer)
+
+		delayInterval := interval
+		go func() {
+			time.Sleep(time.Duration(delayInterval)) // 均匀打散
+			a.aggregating(buffer)
+		}()
+
+		interval -= intervalPice
 	}
 
 	return
@@ -79,7 +88,6 @@ func (a *storeLocal) batchAgg() chan aggItem {
 func (a *storeLocal) aggregating(buffer chan *incrItem) {
 	pool := make(aggItem)
 	// 让tick的启动时间分散
-	time.Sleep(time.Duration(rand.Intn(int(a.Config.getInterval()))))
 	ticker := time.Tick(a.Config.getInterval())
 	defer a.wait.Done()
 
@@ -106,7 +114,7 @@ func (a *storeLocal) aggregating(buffer chan *incrItem) {
 				pool[item.id] += item.delta
 				a.Config.getMetric().MetricIncrCount(item.delta)
 			case <-ticker:
-				a.Config.getLogger().Info("run save")
+				a.Config.getLogger().Info("lcoal run save")
 				a.batchAggChan <- pool
 				a.Config.getMetric().MetricBatchCount(int64(len(pool)))
 				pool = make(aggItem)
