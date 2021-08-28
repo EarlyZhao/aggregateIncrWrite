@@ -79,6 +79,10 @@ func Test_AggRedisIncr(t *testing.T) {
 		done := make(chan bool)
 		go func() {
 			for i := 0; i < times; i ++ {
+				if i % 50 == 0 {
+					go agg.Incr(ctx, fmt.Sprintf("%d", rand.Intn(1000)), 1)
+					continue
+				}
 				agg.Incr(ctx, fmt.Sprintf("%d", rand.Intn(1000)), 1)
 			}
 			done <- true

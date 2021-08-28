@@ -63,9 +63,9 @@ type storeRedis struct {
 func(a *storeRedis) incr(ctx context.Context, id string, val int64)( err error) {
 	item := &incrItem{id: id, delta: val}
 	zsetKey := a.dispatch(ctx, item)
-	incrKey := incrKey(item.id)
+	incrKey := a.incrKey(item.id)
 	// 先 incr
-	if err = a.incrKey(ctx, incrKey, item); err != nil {
+	if err = a.incrByKey(ctx, incrKey, item); err != nil {
 		return
 	}
 	// 再zadd
@@ -76,8 +76,8 @@ func(a *storeRedis) incr(ctx context.Context, id string, val int64)( err error) 
 	return
 }
 
-func incrKey(id string) string {
-	return _redisstorekey + id
+func (a *storeRedis) incrKey(id string) string {
+	return _redisstorekey + a.notChangeBussinessId + id
 }
 
 func (a *storeRedis) recordInList(ctx context.Context, key string, member string) (err error) {
@@ -85,7 +85,7 @@ func (a *storeRedis) recordInList(ctx context.Context, key string, member string
 	return
 }
 
-func (a *storeRedis) incrKey(ctx context.Context, key string, item *incrItem) (err error) {
+func (a *storeRedis) incrByKey(ctx context.Context, key string, item *incrItem) (err error) {
 	err = a.cache.IncrBy(key, item.delta).Err()
 	a.cache.Expire(key, time.Hour * 12)
 	return
@@ -149,10 +149,6 @@ func (a *storeRedis) skipKey(index int) string {
 	return fmt.Sprintf("%s:zset:%s:%v", _redisstorekey, a.notChangeBussinessId, index)
 }
 
-func (a *storeRedis) hashKey(index int) string {
-	return fmt.Sprintf("%s:hash:%s:%v", _redisstorekey, a.notChangeBussinessId, index)
-}
-
 func (a *storeRedis) aggregating(zset string) {
 	defer a.wait.Done()
 
@@ -167,7 +163,7 @@ func (a *storeRedis) aggregating(zset string) {
 			aggs := make(aggItem)
 			for _, key := range ids{
 				if a.zrem(zset, key) > 0 {
-					if delta := a.getset(incrKey(key), 0); delta != 0 {
+					if delta := a.getset(a.incrKey(key), 0); delta != 0 {
 						aggs[key] = delta
 					}
 				}
