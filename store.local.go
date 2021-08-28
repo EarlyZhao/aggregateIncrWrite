@@ -3,13 +3,13 @@ package aggregateIncrWrite
 import (
 	"context"
 	"errors"
-	"fmt"
 	"hash/crc32"
+	"math/rand"
 	"sync"
 	"time"
 )
 
-const incrTimeoutStr = "incr timeout"
+const incrBufferFull = "buffer full"
 
 func NewLocalStore() AggregateStoreInterface{
 	return &storeLocal{stopChan: make(chan bool), wait: &sync.WaitGroup{}}
@@ -32,19 +32,13 @@ func(a *storeLocal) incr(ctx context.Context, id string, val int64)( err error) 
 	item := &incrItem{id: id, delta: val}
 	buffer := a.dispatch(ctx, item)
 
-	var incrTimeout  <-chan time.Time
-
-	// 防御性超时
-	if a.Config.incrTimeout > 0 {
-		incrTimeout = time.After(time.Duration(a.Config.incrTimeout))
-	}
 	select {
 		case <- ctx.Done():
 			return ctx.Err()
 		case buffer <- item:
 			return nil
-		case <-incrTimeout:
-			return errors.New(fmt.Sprintf("%s after: %v", incrTimeoutStr, a.Config.incrTimeout))
+		default:
+			return errors.New(incrBufferFull)
 	}
 }
 
@@ -66,7 +60,7 @@ func(a *storeLocal) stop(ctx context.Context) (err error) {
 func(a *storeLocal) start(c *Config){
 	a.Config = c
 	a.buffers = make([]chan *incrItem, a.Config.getConcurrency())
-	a.batchAggChan = make(chan aggItem, a.Config.getBufferNum())
+	a.batchAggChan = make(chan aggItem, a.Config.getBufferNum() * 100)
 
 	for i := 0; i < a.Config.getConcurrency(); i ++ {
 		buffer := make(chan *incrItem, a.Config.getBufferNum())
@@ -84,6 +78,8 @@ func (a *storeLocal) batchAgg() chan aggItem {
 
 func (a *storeLocal) aggregating(buffer chan *incrItem) {
 	pool := make(aggItem)
+	// 让tick的启动时间分散
+	time.Sleep(time.Duration(rand.Intn(int(a.Config.getInterval()))))
 	ticker := time.Tick(a.Config.getInterval())
 	defer a.wait.Done()
 
