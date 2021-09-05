@@ -28,7 +28,8 @@ func Test_AggLocalIncr(t *testing.T) {
 			&Config{ConcurrencyBuffer: 10, SaveConcurrency: 10},
 			SetOptionStore(NewLocalStore()),
 			SetOptionSaveHandler(func(id string, aggIncr int64) error {
-				//fmt.Printf("id: %s, val: %d\n", id, aggIncr)
+				time.Sleep(time.Millisecond)
+				fmt.Printf("local: id: %s, val: %d\n", id, aggIncr)
 				atomic.AddInt64(&total, aggIncr)
 				return nil
 			}),
@@ -45,11 +46,13 @@ func Test_AggLocalIncr(t *testing.T) {
 				agg.Incr(ctx, fmt.Sprintf("%d", rand.Intn(1000)), 1)
 			}
 			done <- true
+			for i := 0; i < times/100; i ++ {
+				agg.Incr(ctx, fmt.Sprintf("%d", rand.Intn(1000)), 1)
+			}
 		}()
-
-		agg.Stop(ctx)
 		<- done
-		So(total, ShouldEqual, times + times)
+		agg.Stop(ctx)
+		So(total, ShouldEqual, times + times + times/100)
 	})
 
 }
@@ -67,6 +70,7 @@ func Test_AggRedisIncr(t *testing.T) {
 			SetOptionStore(NewRedisStore("test", redis.NewClient(&redis.Options{Addr:"127.0.0.1:6379"}))),
 			SetOptionSaveHandler(func(id string, aggIncr int64) error {
 				fmt.Printf("redis: id: %s, val: %d\n", id, aggIncr)
+				time.Sleep(time.Millisecond)
 				atomic.AddInt64(&total, aggIncr)
 				return nil
 			}),

@@ -19,14 +19,16 @@ func (a *Aggregate ) saveWorker() {
 			}
 		case <- a.stoped:
 			// 打扫战场
-			select {
-			case item, ok := <- a.store.batchAgg():
-				if !ok{
+			for {
+				select {
+				case item, ok := <- a.store.batchAgg():
+					if !ok{
+						return
+					}
+					a.saveBatch(item)
+				default:
 					return
 				}
-				a.saveBatch(item)
-			default:
-				return
 			}
 		}
 	}
